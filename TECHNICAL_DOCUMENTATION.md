@@ -1,54 +1,62 @@
-# Trickster Core – Technische Dokumentation
+# Corode – Technische Dokumentation (CCM-Aligned)
 
 ## Übersicht
 
-Trickster Core ist ein experimenteller Bare-Metal-Kernel für die RISC-V-Architektur (RV64GC). Sein Hauptzweck ist die Demonstration einer hardware-isolierten Laufzeitumgebung, die durch die Physical Memory Protection (PMP)-Einheit von RISC-V geschützt wird.
+Corode ist ein deterministischer, Lease-basierter Rechenkern für RISC-V. Diese Dokumentation beschreibt die Architektur und die Komponenten im Einklang mit dem Corode Computation Model (CCM).
 
-Der Kernel fängt absichtlich eine Zugriffsverletzung ab, um seinen benutzerdefinierten Trap-Handler (`trickster_handler`) zu demonstrieren, der anstelle eines standardmäßigen Panic-Handlers die Kontrolle übernimmt.
+Das System demonstriert seine Kernprinzipien durch einen `trickster_handler` – eine L0-Condition, die auf eine hardware-erzwungene Zugriffsverletzung deterministisch reagiert.
 
-## Komponenten
+## Komponenten im Licht des CCM
 
-### `main.rs` – Der Kernel-Einstiegspunkt
+### `main.rs` – Die Genesis-Condition
 
-- **`_start()`**: Die erste Funktion, die nach dem Bootloader ausgeführt wird. Sie ist `unsafe` und `extern "C"`, um die Rust-Namensveränderung zu verhindern.
+- **`_start()`**: Der rohe Einstiegspunkt. Er fungiert als die erste, implizite **Condition**, die das System in einen definierten Zustand versetzt.
 - **Initialisierungssequenz**:
-  1. **UART**: Initialisiert die serielle Schnittstelle für Textausgaben.
-  2. **PMP**: Richtet die Physical Memory Protection ein, um den gesamten Speicher zu sperren.
-  3. **Trap-Handler**: Setzt den `mtvec` (Machine Trap Vector) auf die Adresse von `trickster_handler`.
-  4. **Zuse-Allokator**: Initialisiert den Speicherallokator für "Cages".
-  5. **Sidekernel**: Startet den (derzeit leeren) Sidekernel-Layer.
-  6. **Self-Attack**: Provoziert eine Zugriffsverletzung durch einen Schreibversuch auf eine geschützte Adresse, was den `trickster_handler` auslöst.
+  1. **UART-Lease**: Die Genesis-Condition least temporär die UART-Hardware, um den Boot-Prozess zu protokollieren.
+  2. **PMP-Konfiguration**: Richtet die grundlegenden Hardware-Grenzen für die Cage-Isolation ein. Dies ist die Basis des Lease-Systems für Speicher.
+  3. **Trap-Handler**: Registriert die `trickster_handler`-Condition als Reaktion auf Maschinen-Traps.
+  4. **Rent-A-Bunch System (`zuse.rs`)**: Initialisiert den Allokator für Cages.
+  5. **Provokation**: Führt eine absichtliche, illegale Speicheroperation aus. Dies ist ein deterministischer Test, der garantiert die `trickster_handler`-Condition aktiviert.
 
-### `trickster.rs` – Der Trap-Handler
+### `trickster.rs` – Eine L0-Trap-Condition
 
-- **`trickster_handler()`**: Diese `#[naked]` Funktion wird direkt vom Prozessor bei einer Trap (wie einer Zugriffsverletzung) angesprungen.
-- **Funktionsweise**: Gibt die im `.vault`-Speicherbereich hinterlegte Nachricht über die UART-Schnittstelle aus und geht dann in eine Endlosschleife.
-- **`.vault`**: Ein spezieller Speicherbereich, der die Nachricht von Trickster enthält. Er ist durch die PMP-Einstellungen vor unbefugtem Zugriff geschützt.
+- **`trickster_handler()`**: Eine persistente L0-Condition, die ausschließlich durch einen Hardware-Trap (hier: Speicherzugriffsfehler) aktiviert wird.
+- **Funktionsweise**: Nach der Aktivierung least sie die UART-Ressource, gibt eine vordefinierte Nachricht aus und beendet ihre Ausführung, woraufhin das System in einen finalen, stabilen Zustand übergeht (Endlosschleife).
 
-### `pmp.rs` – Physical Memory Protection
+### `pmp.rs` – Hardware-Isolation für Cages
 
-- **`init()`**: Konfiguriert die 16 PMP-Regionen so, dass sie standardmäßig gesperrt sind.
-- **`set_region()`**: Richtet eine einzelne PMP-Region mit einer Start-/Endadresse und Zugriffsrechten (Lesen, Schreiben, Ausführen) ein.
-- **NAPOT**: Nutzt das "Naturally Aligned Power-of-Two" (NAPOT)-Format für eine effiziente Adressbereichsdefinition.
+- Stellt die unterste Ebene des **Lease-Systems** für Speicher dar.
+- Definiert die physischen Grenzen einer **Cage** mithilfe der PMP-Hardware.
+- Die Konfiguration einer PMP-Region ist ein temporärer Lease von Adressraum, der an eine Condition vergeben wird.
 
-### `zuse.rs` – Der Cage-Allokator
+### `zuse.rs` – Das "Rent-A-Bunch"-System
 
-- **`ZuseAllocator`**: Verwaltet einen Pool von 15 festen Speicherblöcken à 64 KB, die als "Cages" bezeichnet werden.
-- **`Cage`**: Repräsentiert eine isolierte Speichereinheit für eine Sidekernel-Komponente.
-- **Funktionsweise**: Verwendet eine Bitmaske (`free_mask`), um schnell freie Cages zu finden und zu belegen.
+- Implementiert den Cage-Allokator, der das zentrale **Lease-Modell** für Speicherressourcen verwaltet.
+- **`ZuseAllocator`**: Koordiniert die Vergabe von `Bunches` (hier als `Cages` implementiert) an anfragende Conditions.
+- Eine `Cage` ist eine Form von `Bunch`: ein temporärer, isolierter Speichercontainer, der nach Abschluss der Condition vollständig freigegeben wird.
 
-### `sidekernel.rs` – Der Supervisor-Layer
+### `sidekernel.rs` & `condition.rs` – Platzhalter für die erweiterte Laufzeit
 
-- **`Sidekernel`**: Ein Platzhalter für eine zukünftige Laufzeitumgebung, die isolierte Komponenten in den von `zuse.rs` bereitgestellten Cages ausführen würde.
-- **Vision**: In einer vollständigen Implementierung würde der Sidekernel Systemaufrufe entgegennehmen und die Kommunikation zwischen den Cages verwalten.
+- **`sidekernel.rs`**: Platzhalter für den **Training Side Kernel**. Dieser würde auf einem dedizierten Kern laufen, um Conditions zu verifizieren, bevor sie zur Ausführung zugelassen werden. Er selbst muss alle Ressourcen (wie Cages für die Verifikation) über das Lease-Modell anfordern.
+- **`condition.rs`**: Platzhalter für die Definition und Verwaltung von **Conditions** der Level L1-L3. Dies würde die Mechanismen zum Starten, Schlafenlegen und Beenden von benutzerdefinierten Conditions umfassen.
 
-### `condition.rs` – Bedingungsvariablen
+## Terminal & Command Conditions
 
-- **`Condition`**: Ein Platzhalter für einen Synchronisationsmechanismus, der für die nebenläufige Ausführung von Tasks im Sidekernel unerlässlich wäre.
+### Die Terminal-Condition
 
-## Build- & Test-Prozess
+Das interaktive Terminal ist das primäre Interface zur Interaktion mit Corode. Es ist als persistente **L2-Condition** konzipiert, die nach dem Systemstart aktiviert wird. 
 
-- **Ziel-Architektur**: `riscv64gc-unknown-none-elf`
-- **Toolchain**: Der Build erfordert die entsprechende Rust-Toolchain, die mit `rustup target add` installiert wird.
-- **`run.sh`**: Ein Shell-Skript, das den `cargo build` Prozess und den anschließenden Test in QEMU automatisiert.
-- **QEMU**: Der Kernel wird mit `qemu-system-riscv64` in einer `virt`-Maschine ohne grafische Oberfläche oder BIOS getestet.
+- **Ressourcen-Leasing**: Die Terminal-Condition least dauerhaft die primären I/O-Ressourcen: die Tastatur (als Eingabestrom) und den Bildschirm (als Ausgabepuffer).
+- **Aufgabe**: Ihre einzige Aufgabe ist es, Benutzereingaben zu empfangen, sie gemäß der **Corode Command Language** zu parsen und die entsprechende **Command-Condition** zu starten.
+
+### Command-Conditions
+
+Jeder Befehl, der im Terminal eingegeben wird, wird nicht vom Terminal selbst ausgeführt. Stattdessen erzeugt der Parser eine neue, temporäre und zustandslose **Condition** zur Ausführung des Befehls.
+
+- **Beispiel**: Der Befehl `show files` erzeugt eine neue `ShowFilesCondition`.
+  - Diese Condition least temporär Zugriff auf das Dateisystem-Metadaten-Verzeichnis.
+  - Sie liest die Dateiliste.
+  - Sie least temporär Zugriff auf den Bildschirm-Ausgabepuffer, um das Ergebnis zu schreiben.
+  - Nach der Ausführung gibt sie alle geleasten Ressourcen sofort wieder frei und geht in den `completed`-Zustand über.
+
+Dieses Modell stellt sicher, dass das Terminal selbst schlank und dumm bleibt. Die gesamte Logik ist in kleinen, deterministischen und in sich geschlossenen Command-Conditions gekapselt, was die Verifizierbarkeit des Gesamtsystems drastisch vereinfacht.
