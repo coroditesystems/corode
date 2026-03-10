@@ -1,0 +1,12 @@
+# Rust
+/target
+Cargo.lock
+
+# Eigene Build-Artefakte
+*.o
+*.elf
+*.bin
+
+# IDE-spezifische Dateien
+.vscode/
+.idea/

@@ -1,109 +1,38 @@
-⚙️ corode-core
+# corode-core
 
-**Core. Code. Node. Corrode.**  
-**von Daniel Koch // Bl4ckj3st3r**  
-**Erstellt: 04. März 2026**
+**Motto:** Isolation statt Abstraktion. Determinismus statt Chaos.
 
-> Rust korrodiert das alte System von innen.  
-> Schicht für Schicht. Bit für Bit.  
-> Bis nur noch das Wesentliche übrig bleibt.
+`corode-core` ist ein von Grund auf neu entwickelter, in Rust geschriebener Bare-Metal-Kernel für die RISC-V-Architektur. Unser Ziel ist es, ein beweisbar sicheres und deterministisches System zu schaffen, indem wir die Hardware-Sicherheitsfeatures der CPU (Physical Memory Protection) als primäres Ordnungsprinzip nutzen.
 
----
+## Kernprinzipien
 
-## Was ist corode-core?
+*   **Hardware-Sozialdemokratie:** Der physische Speicher ist in 16 unveränderliche, hardware-gesicherte "Vektoren" aufgeteilt. Jeder System-Komponente wird genau der Speicher zugewiesen, den sie zum Überleben braucht – nicht mehr und nicht weniger. Die Gesetze sind in Silizium gegossen.
+*   **Isolation statt Abstraktion:** Wir vermeiden komplexe Software-Abstraktionen. Stattdessen erzwingen wir eine strikte Isolation direkt auf der Hardware-Ebene mittels RISC-V PMP.
+*   **Conditions statt Prozesse:** Unser Ausführungsmodell basiert auf `Conditions` – zustandslose, überprüfbare Code-Einheiten, deren Korrektheit vor der Ausführung durch einen SMT-Solver (wie Z3) bewiesen werden kann.
 
-Das Fundament. Der Kern unter dem Kern.
+## Aktueller Status: Meilenstein 1 ✅
 
-Kein Betriebssystem. Keine Abstraktion. Keine 30 Millionen Zeilen.
+Das Fundament ist fertig, stabil und bewiesen.
 
-**Eine neue Art, Maschinen zu denken.**
+1.  **Stabiler Kernel-Prototyp:** Der `corode-core` Kernel (`src/main.rs`) bootet, konfiguriert die Hardware-Firewall (PMP) und übernimmt die vollständige Systemkontrolle.
+2.  **Hardware-Firewall Aktiv:** Alle 16 Speicher-Vektoren sind gemäß unserer Verfassung (`docs/PMP_VEKTOR_MAP.md`) konfiguriert und versiegelt.
+3.  **Sicherheit Bewiesen:** Ein integrierter Selbsttest beweist zur Boot-Zeit, dass die PMP-Schilde halten und das System selbst Angriffe von innen abwehrt.
 
-Geschrieben in Rust. Auf einem Handy. In Termux.  
-Von einem Mann ohne Abi, ohne Geld, ohne festes Dach.  
-Mit einem Kopf, der nicht aufhört zu denken.
+## Nächste Schritte
 
----
+Die nächsten Schritte sind in unserer Roadmap klar definiert:
 
-## Das Problem
+1.  **Sidekernel-Integration:** Implementierung der Kommunikationsprotokolle für die gekapselten Sidekernels (AI, Linux-Treiber, Unix-Userland).
+2.  **Z3³-Speicherlogistik:** Vollständige Implementierung des BlockID-basierten Speichermodells.
 
-Seit Von Neumann kämpfen Prozesse um Ressourcen.  
-Survival of the fittest – in Silizium gegossen.
+## Dokumentation
 
-Aber der Kampf war nur nötig, weil früher der Speicher klein war.  
-Heute haben wir 64 GB RAM. 16 Kerne. 2 TB NVMe.
-
-**Wir kämpfen immer noch – obwohl genug für alle da wäre.**
+*   **[Repository-Struktur](docs/REPOSITORY_STRUCTURE.md):** Eine Landkarte des Projekts.
+*   **[PMP Vektor-Karte](docs/PMP_VEKTOR_MAP.md):** Die "Verfassung" unseres Systems, die die Speicheraufteilung definiert.
+*   **[Easter Eggs](docs.EASTEREGGS.md):** Die kulturelle Seele des Projekts.
 
 ---
 
-## Die 8 Grundsätze
-
-| Heute | corode-core |
-|-------|-------------|
-| Abstraktion | **Isolation** |
-| Krieg um Ressourcen | **Harmonie** |
-| Interrupts & Chaos | **Determinismus** |
-| Pointer | **Block-ID** |
-| Überlast & Crash | **Sättigung** |
-| 30 Mio. Zeilen Kernel | **Nur ein paar Bits** |
-| Prozesse nehmen zu viel | **Bedarf statt Gier** |
-| Survival of the fittest | **Hardware-Sozialdemokratie** |
-
----
-
-## Hardware-Sozialdemokratie
-
-> Jede Condition ist wichtig.  
-> Gleichberechtigt in ihrer Rolle.  
-> Bekommt ihren Platz.  
-> Darf nicht mehr beanspruchen –  
-> aber ist sicher, dass sie ihren Raum kriegt.
-
----
-
-## Der Core
-
-Gebaut in 2 Stunden. Ohne Vorwissen. Auf einem Handy. In Termux.
-
-- `no_std` – kein Overhead, kein Bullshit
-- Bare metal RISC-V
-- PMP (Physical Memory Protection)
-- Trap-Handler
-- **1.78kb** – und wird kleiner
-
----
-
-## Roadmap
-
-- [x] POC – bare metal RISC-V, Rust, no_std, PMP
-- [ ] Z3³-Speicherlogistik – Block-ID statt Pointer
-- [ ] L0-Agenten – Hardware-Intelligenz auf dem Blech
-- [ ] Sidekernels – isolierte Kommunikation
-- [ ] FPGA-Prototyp
-- [ ] Wavefloating Architecture – Wellen statt Bits
-
----
-
-## Lizenz
-
-**Triple Licensing:**
-
-- 🟢 **GPLv3** – Core (Open Source, langer Arm)
-- 🔵 **Business License** – Rust-Dialekte & Compiler
-- 🔴 **Closed Source** – Z3³ & Security-MCU-Einheiten
-
----
-
-## Das Paradigma
-
-> Isolation statt Abstraktion.  
-> Determinismus statt Interrupt.  
-> Harmonie statt Krieg.  
-> Block-ID statt Pointer.  
-> Bedarfszuteilung statt Gier.  
-> Hardware-Sozialdemokratie statt Survival of the fittest.
-
-Das ist kein Betriebssystem.  
-Das ist **eine neue Art, Maschinen zu denken**.
-
-Rust korrodiert. Der Core bleibt. **Weiter.** ⚙️
+**The Pink Hacker Boy**  
+Eifel, 2026  
+💖🎒🤡🥚😎
