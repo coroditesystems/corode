@@ -12,13 +12,16 @@ use core::arch::asm;
 // =============================================================================
 // I. Die Verfassung: PMP-Konstanten & Adress-Layout
 // =============================================================================
-const PMP_R: usize = 1 << 0; const PMP_W: usize = 1 << 1; const PMP_X: usize = 1 << 2;
-const PMP_NAPOT: usize = 3 << 3; const PMP_L: usize = 1 << 7;
+const PMP_R: u8 = 1 << 0; const PMP_W: u8 = 1 << 1; const PMP_X: u8 = 1 << 2;
+const PMP_A_OFF: u8 = 0; const PMP_A_TOR: u8 = 1; const PMP_A_NA4: u8 = 2; const PMP_A_NAPOT: u8 = 3;
+const PMP_L: u8 = 1 << 7;
 
+// Adress-Layout
+const ADDR_PMP_HEADER_CAGE: usize = 0x8000F000;   // 4KB Käfig für die PMP-Konfiguration selbst
 const ADDR_VEC_0_THRON: usize = 0x80000000;      // 64KB Kernel
 const ADDR_VEC_1_WAECHTER: usize = 0x80010000;   // 4KB Harlekin
 const ADDR_VEC_2_SCHREIBER: usize = 0x10000000;   // 1MB Logger
-const ADDR_VEC_2_SCHREIBER_END: usize = ADDR_VEC_2_SCHREIBER + (1024 * 1024) -1; // Ende der Logger-Region
+const ADDR_VEC_2_SCHREIBER_END: usize = ADDR_VEC_2_SCHREIBER + (1024 * 1024) -1;
 const ADDR_VEC_3_ORAKEL: usize = 0x10010000;    // 1MB Z3
 const ADDR_VEC_5_EXIL: usize = 0x90000000;       // 256MB Turing-Band
 const ADDR_VEC_6_BOTE: usize = 0x80020000;       // 64KB corode-net
@@ -30,8 +33,43 @@ const ADDR_VEC_11_DIPLOMAT: usize = 0xE0000000;   // 1GB Unix Sidekernel
 const ADDR_VEC_14_WERKZEUGE: usize = 0x0C000000; // MMIO Bereich
 const ADDR_VEC_15_ZIEL: usize = 0xDEADBEEF;     // Einzelne, gesperrte Adresse
 
+
 // =============================================================================
-// II. Der Chronist: Trickster (Globale Singleton Instanz)
+// II. Die PMP Vektor Map: Datengetriebene Sicherheitskonfiguration
+// =============================================================================
+
+#[repr(C)]
+struct PmpEntry {
+    addr: usize,
+    size: usize,
+    permissions: u8,
+}
+
+// Diese statische Konfiguration wird im `PMP_HEADER_CAGE` abgelegt und ist
+// zur Laufzeit schreibgeschützt.
+#[link_section = ".pmp_cage"]
+static PMP_VECTOR_MAP: [PmpEntry; 16] = [
+    PmpEntry { addr: ADDR_VEC_0_THRON, size: 64 * 1024, permissions: PMP_R | PMP_X | PMP_L },
+    PmpEntry { addr: ADDR_VEC_1_WAECHTER, size: 4 * 1024, permissions: PMP_R | PMP_X | PMP_L },
+    PmpEntry { addr: ADDR_VEC_2_SCHREIBER, size: 1 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_L },
+    PmpEntry { addr: ADDR_VEC_3_ORAKEL, size: 1 * 1024 * 1024, permissions: PMP_R | PMP_X | PMP_L },
+    PmpEntry { addr: ADDR_PMP_HEADER_CAGE, size: 4 * 1024, permissions: PMP_R | PMP_L }, // Der Käfig selbst!
+    PmpEntry { addr: ADDR_VEC_5_EXIL, size: 256 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_L },
+    PmpEntry { addr: ADDR_VEC_6_BOTE, size: 64 * 1024, permissions: PMP_R | PMP_W | PMP_X | PMP_L },
+    PmpEntry { addr: ADDR_VEC_7_AUGE, size: 32 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_L },
+    PmpEntry { addr: ADDR_VEC_8_ARENA0, size: 128 * 1024 * 1024, permissions: PMP_A_NAPOT }, // Kein Lock
+    PmpEntry { addr: ADDR_VEC_9_LEHRER, size: 1024 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_X }, // Kein Lock
+    PmpEntry { addr: ADDR_VEC_10_TREIBER, size: 1024 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_X }, // Kein Lock
+    PmpEntry { addr: ADDR_VEC_11_DIPLOMAT, size: 1024 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_X }, // Kein Lock
+    PmpEntry { addr: 0, size: 0, permissions: 0 }, // Vektor 12: ungenutzt
+    PmpEntry { addr: 0, size: 0, permissions: 0 }, // Vektor 13: ungenutzt
+    PmpEntry { addr: ADDR_VEC_14_WERKZEUGE, size: 8 * 1024 * 1024, permissions: PMP_R | PMP_W }, // Kein Lock
+    PmpEntry { addr: ADDR_VEC_15_ZIEL, size: 4, permissions: PMP_R | PMP_L },
+];
+
+
+// =============================================================================
+// III. Der Chronist: Trickster (Globale Singleton Instanz)
 // =============================================================================
 struct Trickster {
     cursor: *mut u8,
@@ -39,9 +77,6 @@ struct Trickster {
     end_addr: usize,
 }
 
-// Globale, zustandsbehaftete Instanz des Loggers.
-// `unsafe` ist hier notwendig, weil wir eine globale, veränderliche Ressource in
-// einer Bare-Metal-Umgebung verwalten.
 static mut GLOBAL_TRICKSTER: Trickster = Trickster {
     cursor: ADDR_VEC_2_SCHREIBER as *mut u8,
     start_addr: ADDR_VEC_2_SCHREIBER,
@@ -49,43 +84,32 @@ static mut GLOBAL_TRICKSTER: Trickster = Trickster {
 };
 
 impl Trickster {
-    // Holt eine `unsafe` veränderliche Referenz auf den globalen Logger.
     fn get_global() -> &'static mut Trickster {
         unsafe { &mut GLOBAL_TRICKSTER }
     }
     
-    // Private Log-Funktion, die die zirkuläre Pufferlogik implementiert.
     fn log_byte(&mut self, byte: u8) {
         unsafe {
-            // Prüfen, ob der Cursor das Ende erreicht hat.
             if self.cursor as usize >= self.end_addr {
-                self.cursor = self.start_addr as *mut u8; // Zurück zum Anfang springen.
+                self.cursor = self.start_addr as *mut u8;
             }
             core::ptr::write_volatile(self.cursor, byte);
             self.cursor = self.cursor.add(1);
         }
     }
 
-    // Öffentliche API zum Loggen einer Zeichenkette.
     fn log(&mut self, message: &str) {
         for &byte in message.as_bytes() {
             self.log_byte(byte);
         }
     }
     
-    // Öffentliche API zum Loggen einer Hex-Zahl.
     fn log_hex(&mut self, n: usize) {
         let mut temp = n;
         let mut buffer = [0u8; 16];
         let mut i = 15;
-
         self.log("0x");
-
-        if temp == 0 {
-            self.log_byte(b'0');
-            return;
-        }
-
+        if temp == 0 { self.log_byte(b'0'); return; }
         loop {
             let digit = (temp % 16) as u8;
             buffer[i] = if digit < 10 { digit + b'0' } else { digit - 10 + b'a' };
@@ -93,7 +117,6 @@ impl Trickster {
             if temp == 0 { break; }
             i -= 1;
         }
-        
         for &byte in &buffer[i..] {
             self.log_byte(byte);
         }
@@ -101,16 +124,15 @@ impl Trickster {
 }
 
 // =============================================================================
-// III. Der letzte Ausweg: Panic Handler
+// IV. Der letzte Ausweg: Panic Handler
 // =============================================================================
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! { loop {} }
 
 // =============================================================================
-// IV. Der Souverän: _start (Eintrittspunkt)
+// V. Der Souverän: _start (Eintrittspunkt)
 // =============================================================================
 
-// Der Eierschalensollbruchstellenverursacher: Ein pseudo-zufälliger Trigger
 struct Lcg { state: u32 }
 impl Lcg {
     fn new(seed: u32) -> Self { Lcg { state: seed } }
@@ -122,20 +144,17 @@ impl Lcg {
 
 #[no_mangle]
 pub unsafe extern "C" fn _start() -> ! {
+    setup_pmp_vectors();
     let trickster = Trickster::get_global();
     asm!("csrw mtvec, {}", in(reg) harlekin_trap_handler as usize);
-    setup_pmp_vectors();
     
-    // Initialisiere den Zufallsgenerator (der Seed ist hier noch statisch)
     let mut rng = Lcg::new(0xCAFEF00D); 
     let random_value = rng.next();
 
-    // Seltene Chance (ca. 1 zu 65536) das Easter Egg auszulösen
     if (random_value >> 16) == 0xDEAD {
-        trickster.log("CHAOS-ANOMALIE ENTDECKT! \n  >> Eierschalensollbruchstellenverursacher AKTIVIERT! <<\n");
+        trickster.log("CHAOS-ANOMALIE ENTDECKT! \n");
         trickster.log("INITIIERE OOC-SELBSTANGRIFF...\n");
         core::ptr::write_volatile(ADDR_VEC_15_ZIEL as *mut u32, 0x1337);
-        // Die Erfolgsmeldung wird nun vom Harlekin geloggt, da er den Angriff abfängt.
     } else {
         trickster.log("PMP-Schilde oben. Selbsttest ohne Anomalie. System stabil.\n");
     }
@@ -144,88 +163,68 @@ pub unsafe extern "C" fn _start() -> ! {
 }
 
 // =============================================================================
-// V. Der Wächter: Harlekin Trap Handler
+// VI. Der Wächter: Harlekin Trap Handler
 // =============================================================================
 #[no_mangle]
 #[repr(align(4))]
 pub unsafe extern "C" fn harlekin_trap_handler() {
     let trickster = Trickster::get_global();
-    let mcause: usize;
-    let mepc: usize;
-    let mtval: usize;
+    let (mcause, mepc, mtval): (usize, usize, usize);
     asm!("csrr {}, mcause", out(reg) mcause);
     asm!("csrr {}, mepc", out(reg) mepc);
     asm!("csrr {}, mtval", out(reg) mtval);
 
-    trickster.log("\n**********************************************\n");
-    trickster.log(">> HARLEKIN FÄNGT EINDRINGLING AB! <<\n");
-    trickster.log("   URSACHE (mcause): "); trickster.log_hex(mcause);
-    // Decode mcause to provide a human-readable reason
+    trickster.log("\n>> HARLEKIN FÄNGT EINDRINGLING AB! <<\n");
+    trickster.log("   URSACHE: "); trickster.log_hex(mcause);
     match mcause {
         5 => trickster.log(" (Load access fault)\n"),
         7 => trickster.log(" (Store/AMO access fault)\n"),
         _ => trickster.log(" (Unknown trap cause)\n"),
     }
-    trickster.log("   ORT (mepc):     "); trickster.log_hex(mepc); trickster.log(" (Befehl, der Fehler auslöste)\n");
-    trickster.log("   ZIEL (mtval):   "); trickster.log_hex(mtval); trickster.log(" (Verbotene Speicheradresse)\n");
-    trickster.log("**********************************************\n");
+    trickster.log("   ORT:     "); trickster.log_hex(mepc);
+    trickster.log("\n   ZIEL:    "); trickster.log_hex(mtval);
+    trickster.log("\n");
 
-    // Überspringe die fehlerhafte Anweisung und setze die Ausführung fort.
-    // Der Harlekin heilt das System, indem er den illegalen Schreibversuch ignoriert.
     asm!("csrw mepc, {}", in(reg) (mepc + 4));
 }
 
 // =============================================================================
-// VI. Die Schmiede: PMP Vektor-Setup
+// VII. Die Schmiede: PMP Vektor-Setup (Datengetrieben)
 // =============================================================================
 #[inline(never)]
 unsafe fn setup_pmp_vectors() {
-    // Vektor 0: Thron (R-X, 64KB)
-    asm!("csrw pmpaddr0, {}", in(reg) (ADDR_VEC_0_THRON >> 2) | ((32*1024)-1) );
-    asm!("csrw pmpcfg0, {}", in(reg) PMP_NAPOT | PMP_R | PMP_X | PMP_L);
-    // Vektor 1: Wächter (R-X, 4KB)
-    asm!("csrw pmpaddr1, {}", in(reg) (ADDR_VEC_1_WAECHTER >> 2) | ((2*1024)-1) );
-    asm!("csrw pmpcfg1, {}", in(reg) PMP_NAPOT | PMP_R | PMP_X | PMP_L);
-    // Vektor 2: Schreiber (RW-, 1MB)
-    asm!("csrw pmpaddr2, {}", in(reg) (ADDR_VEC_2_SCHREIBER >> 2) | ((512*1024)-1) );
-    asm!("csrw pmpcfg2, {}", in(reg) PMP_NAPOT | PMP_R | PMP_W | PMP_L);
-    // Vektor 3: Orakel (R-X, 1MB)
-    asm!("csrw pmpaddr3, {}", in(reg) (ADDR_VEC_3_ORAKEL >> 2) | ((512*1024)-1) );
-    asm!("csrw pmpcfg3, {}", in(reg) PMP_NAPOT | PMP_R | PMP_X | PMP_L);
-    // Vektor 4: Gesetzbuch (geschützt durch Lock-Bits der anderen)
-    asm!("csrw pmpaddr4, {}", in(reg) 0);
-    asm!("csrw pmpcfg4, {}", in(reg) 0);
-    // Vektor 5: Exil (RW-, 256MB)
-    asm!("csrw pmpaddr5, {}", in(reg) (ADDR_VEC_5_EXIL >> 2) | ((128*1024*1024)-1) );
-    asm!("csrw pmpcfg5, {}", in(reg) PMP_NAPOT | PMP_R | PMP_W | PMP_L);
-    // Vektor 6: Bote (RWX, 64KB)
-    asm!("csrw pmpaddr6, {}", in(reg) (ADDR_VEC_6_BOTE >> 2) | ((32*1024)-1) );
-    asm!("csrw pmpcfg6, {}", in(reg) PMP_NAPOT | PMP_R | PMP_W | PMP_X | PMP_L);
-    // Vektor 7: Auge (RW-, 32MB)
-    asm!("csrw pmpaddr7, {}", in(reg) (ADDR_VEC_7_AUGE >> 2) | ((16*1024*1024)-1) );
-    asm!("csrw pmpcfg7, {}", in(reg) PMP_NAPOT | PMP_R | PMP_W | PMP_L);
-    // Vektor 8: Arena 0 (---, 128MB, ungesperrt)
-    asm!("csrw pmpaddr8, {}", in(reg) (ADDR_VEC_8_ARENA0 >> 2) | ((64*1024*1024)-1) );
-    asm!("csrw pmpcfg8, {}", in(reg) PMP_NAPOT);
-    // Vektor 9: Lehrer (RWX, 1GB, ungesperrt)
-    asm!("csrw pmpaddr9, {}", in(reg) (ADDR_VEC_9_LEHRER >> 2) | ((512*1024*1024)-1) );
-    asm!("csrw pmpcfg9, {}", in(reg) PMP_NAPOT | PMP_R | PMP_W | PMP_X);
-    // Vektor 10: Treiber (RWX, 1GB, ungesperrt)
-    asm!("csrw pmpaddr10, {}", in(reg) (ADDR_VEC_10_TREIBER >> 2) | ((512*1024*1024)-1) );
-    asm!("csrw pmpcfg10, {}", in(reg) PMP_NAPOT | PMP_R | PMP_W | PMP_X);
-    // Vektor 11: Diplomat (RWX, 1GB, ungesperrt)
-    asm!("csrw pmpaddr11, {}", in(reg) (ADDR_VEC_11_DIPLOMAT >> 2) | ((512*1024*1024)-1) );
-    asm!("csrw pmpcfg11, {}", in(reg) PMP_NAPOT | PMP_R | PMP_W | PMP_X);
-    // Vektor 12: Arena 1 (ungenutzt)
-    asm!("csrw pmpaddr12, {}", in(reg) 0);
-    asm!("csrw pmpcfg12, {}", in(reg) 0);
-    // Vektor 13: Vorhof (ungenutzt)
-    asm!("csrw pmpaddr13, {}", in(reg) 0);
-    asm!("csrw pmpcfg13, {}", in(reg) 0);
-    // Vektor 14: Werkzeuge (RW-, MMIO, ungesperrt)
-    asm!("csrw pmpaddr14, {}", in(reg) (ADDR_VEC_14_WERKZEUGE >> 2) | ((8*1024*1024)-1) );
-    asm!("csrw pmpcfg14, {}", in(reg) PMP_NAPOT | PMP_R | PMP_W);
-    // Vektor 15: Ziel (R--, 4-Byte)
-    asm!("csrw pmpaddr15, {}", in(reg) ADDR_VEC_15_ZIEL >> 2);
-    asm!("csrw pmpcfg15, {}", in(reg) PMP_NAPOT | PMP_R | PMP_L);
+    // WICHTIG: Die PMP-Konfiguration muss vor dem Setzen des Trap-Handlers erfolgen,
+    // da der Cage sonst sofort den Zugriff sperren würde.
+    for (i, entry) in PMP_VECTOR_MAP.iter().enumerate() {
+        if entry.size == 0 {
+            // Null-Eintrag bedeutet, der Vektor ist deaktiviert.
+            asm!("csrw pmpcfg{}", in(reg) 0, const i);
+            continue;
+        }
+
+        // NAPOT (Naturally Aligned Power-of-Two) Berechnung
+        let napot_addr = (entry.addr >> 2) | ((entry.size - 1) >> 3);
+        let pmp_cfg = entry.permissions | (PMP_A_NAPOT << 3);
+
+        // Setze die pmpaddr- und pmpcfg-Register dynamisch
+        match i {
+            0 => { asm!("csrw pmpaddr0, {}", in(reg) napot_addr); asm!("csrw pmpcfg0, {}", in(reg) pmp_cfg); },
+            1 => { asm!("csrw pmpaddr1, {}", in(reg) napot_addr); asm!("csrw pmpcfg1, {}", in(reg) pmp_cfg); },
+            2 => { asm!("csrw pmpaddr2, {}", in(reg) napot_addr); asm!("csrw pmpcfg2, {}", in(reg) pmp_cfg); },
+            3 => { asm!("csrw pmpaddr3, {}", in(reg) napot_addr); asm!("csrw pmpcfg3, {}", in(reg) pmp_cfg); },
+            4 => { asm!("csrw pmpaddr4, {}", in(reg) napot_addr); asm!("csrw pmpcfg4, {}", in(reg) pmp_cfg); },
+            5 => { asm!("csrw pmpaddr5, {}", in(reg) napot_addr); asm!("csrw pmpcfg5, {}", in(reg) pmp_cfg); },
+            6 => { asm!("csrw pmpaddr6, {}", in(reg) napot_addr); asm!("csrw pmpcfg6, {}", in(reg) pmp_cfg); },
+            7 => { asm!("csrw pmpaddr7, {}", in(reg) napot_addr); asm!("csrw pmpcfg7, {}", in(reg) pmp_cfg); },
+            8 => { asm!("csrw pmpaddr8, {}", in(reg) napot_addr); asm!("csrw pmpcfg8, {}", in(reg) pmp_cfg); },
+            9 => { asm!("csrw pmpaddr9, {}", in(reg) napot_addr); asm!("csrw pmpcfg9, {}", in(reg) pmp_cfg); },
+            10 => { asm!("csrw pmpaddr10, {}", in(reg) napot_addr); asm!("csrw pmpcfg10, {}", in(reg) pmp_cfg); },
+            11 => { asm!("csrw pmpaddr11, {}", in(reg) napot_addr); asm!("csrw pmpcfg11, {}", in(reg) pmp_cfg); },
+            12 => { asm!("csrw pmpaddr12, {}", in(reg) napot_addr); asm!("csrw pmpcfg12, {}", in(reg) pmp_cfg); },
+            13 => { asm!("csrw pmpaddr13, {}", in(reg) napot_addr); asm!("csrw pmpcfg13, {}", in(reg) pmp_cfg); },
+            14 => { asm!("csrw pmpaddr14, {}", in(reg) napot_addr); asm!("csrw pmpcfg14, {}", in(reg) pmp_cfg); },
+            15 => { asm!("csrw pmpaddr15, {}", in(reg) napot_addr); asm!("csrw pmpcfg15, {}", in(reg) pmp_cfg); },
+            _ => {},
+        }
+    }
 }
