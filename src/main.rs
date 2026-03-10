@@ -1,119 +1,147 @@
 #![no_std]
 #![no_main]
 
+mod block;
+mod cond;
+mod pmp;
+mod state;
+mod trap;
+mod uart;
+
 use core::panic::PanicInfo;
-use core::arch::asm;
-use core::ptr::write_volatile;
+use crate::uart::{uart_puts, uart_getc, set_pink_mode};
+use crate::state::CoreState;
+use crate::cond::id;
 
-// =============================================================================
-// 1. Startup and External Symbols
-// =============================================================================
+// Statischer Puffer für die Terminal-Eingabe
+const CMD_BUFFER_SIZE: usize = 128;
+static mut CMD_BUFFER: [u8; CMD_BUFFER_SIZE] = [0; CMD_BUFFER_SIZE];
+static mut CMD_LEN: usize = 0;
 
-extern "C" {
-    fn __trap_vector();
-}
-
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
-    unsafe { asm!("li sp, 0x80100000"); }
-    
-    // Header der neuen Ära
-    uart_puts("\n--- corode-core v2.0: OXIZ Pilot Phase ---\n");
-    
-    setup_trap_vector();
-    setup_pmp_shield();
-
-    // --- Das OXIZ-Manifest: Die erste Condition des Systems ---
-    
-    // OXIZ ist rein, minimalistisch und beweisbar.
-    let oxiz_condition = Condition {
-        id: 0x01,                // Die Erste ihrer Art
-        name: "OXIZ",            // Der Name ist Programm
-        entry_point: 0xB0000000, // Start der ARENA0 Sandkiste
-        required_memory: 0x4000, // 16KB für die erste Ausbaustufe
-        role: 0x01,              // Basis-Rolle: Sensor/Actor
-        proof_hash: 0x07122026,  // Das beweisbare Manifest (Datum der Vision?)
-    };
-
-    uart_puts("Condition OXIZ wird dem Orakel vorgelegt...\n");
-    
-    // Das Orakel prüft die mathematische Korrektheit von OXIZ
-    if verify_condition_via_oracle(&oxiz_condition) {
-        uart_puts(">> ORAKEL: OXIZ ist beweisbar sicher. Existenz GENEHMIGT. <<\n");
-        // Hier würde der Kernel den Speicherbereich für OXIZ freischalten (PMP)
-        // und den Sprung in den Code von OXIZ vorbereiten.
-    } else {
-        uart_puts("!! ORAKEL: ALARM! OXIZ verletzt Systemgesetze. ABGELEHNT. !!\n");
-    }
-
-    // --- Ultima Ratio: Der Harlekin wacht über die Hardware ---
-    uart_puts("\nStarte Hardware-Integritätstest (Vault-Schutz)...\n");
-    let vault_ptr = 0x8000F000 as *mut u32; // Vault (geschützt durch PMP)
-    unsafe { write_volatile(vault_ptr, 0xDEADC0DE); }
-
-    loop { unsafe { asm!("wfi"); } }
-}
-
-// =============================================================================
-// 2. Das Orakel & Das Condition-Paradigma
-// =============================================================================
-
-#[repr(C)]
-pub struct Condition {
-    pub id: u32,
-    pub name: &'static str,
-    pub entry_point: usize,
-    pub required_memory: usize,
-    pub role: u32,
-    pub proof_hash: u32,
-}
-
-/// Das Orakel: Der Ort, an dem Z3-Logik und Kernel-Regeln verschmelzen.
-fn verify_condition_via_oracle(cond: &Condition) -> bool {
-    // 1. Bereichsprüfung (Deterministisch)
-    let arena_start = 0xB0000000;
-    let arena_end = arena_start + (128 * 1024 * 1024); // 128MB ARENA0
-
-    // Beweisbare Sicherheit: Liegt OXIZ vollständig in der zugewiesenen Sandkiste?
-    if cond.entry_point < arena_start || (cond.entry_point + cond.required_memory) > arena_end {
-        return false; // Mathematischer Ausschluss
-    }
-
-    // 2. Identitätsprüfung (Beweis-Check)
-    // In der Realität würde hier der Z3-Proof-Hash gegen das Manifest geprüft.
-    if cond.proof_hash == 0x07122026 {
-        true
-    } else {
-        false
-    }
-}
-
-// =============================================================================
-// 3. UART & Infrastruktur
-// =============================================================================
-const UART_BASE: *mut u8 = 0x10000000 as *mut u8;
-fn uart_putc(c: u8) { unsafe { write_volatile(UART_BASE, c); } }
-fn uart_puts(s: &str) { for byte in s.bytes() { uart_putc(byte); } }
+static mut PANIC_COUNT: u32 = 0;
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! { loop { unsafe { asm!("wfi"); } } }
+fn panic(info: &PanicInfo) -> ! {
+    let harlekin_gesichter = [
+        "O_o", // 1. Panik
+        "o_O", // 2. Panik
+        "X_x", // 3. Panik
+        "x_X", // 4. Panik
+        "T_T", // 5. Panik und danach
+    ];
 
-fn setup_trap_vector() { unsafe { asm!("csrw mtvec, {}", in(reg) __trap_vector as usize); } }
-
-fn setup_pmp_shield() {
-    // NAPOT Schutz für den Header-Käfig (Vault) bei 0x8000F000
-    let pmp_addr = (0x8000F000 >> 2) | ((4096 - 1) >> 3);
     unsafe {
-        asm!("csrw pmpaddr0, {}", in(reg) pmp_addr);
-        asm!("csrw pmpcfg0, {}", in(reg) 0x81); // Read, Locked, NAPOT
+        let gesicht_index = if PANIC_COUNT < harlekin_gesichter.len() as u32 {
+            PANIC_COUNT as usize
+        } else {
+            harlekin_gesichter.len() - 1
+        };
+
+        uart_puts("\n\n         ╭─────────────────────╮\n         │  🤡                 │\n         │   _/\\_/            │\n         │    (");
+        uart_puts(harlekin_gesichter[gesicht_index]);
+        uart_puts(")            │\n         │   > ^ <             │\n         │  /       \\          │\n         │ │ HARLEKIN │        │\n         │ │  SAGT    │        │\n         │ │  NEIN,   │        │\n         │ │   BRO!   │        │\n         │  \\_______/         │\n         ╰─────────────────────╯\n\n");
+
+        PANIC_COUNT += 1;
+    }
+
+    if let Some(location) = info.location() {
+        uart_puts("    Location: ");
+        uart_puts(location.file());
+        uart_puts("\n");
+    }
+    loop {}
+}
+
+fn handle_terminal_input() {
+    if let Some(c) = uart_getc() {
+        unsafe {
+            match c {
+                13 => { // Enter (carriage return)
+                    uart_puts("\n");
+                    if CMD_LEN > 0 {
+                        let cmd = core::str::from_utf8_unchecked(&CMD_BUFFER[0..CMD_LEN]);
+                        
+                        // --- EASTER EGG TISCH ---
+                        if cmd == "orakel" {
+                            uart_puts("Das Orakel schweigt. Die Bedingungen sind noch nicht reif.\n");
+                        } else if cmd == "4711" {
+                            uart_puts("Eine Bedingung, die noch nicht gestellt wurde.\n");
+                        } else if cmd == "xyzzy" { // Klassiker
+                            uart_puts("Nichts passiert hier.\n");
+                        } else if cmd == "oma" {
+                            uart_puts("Oma ist stolz auf dich.\n");
+                        } else if cmd == "philosoph" {
+                            uart_puts("Wer mit Ungeheuern kaempft, mag zusehn, dass er nicht dabei zum Ungeheuer wird.\n");
+                        } else if cmd == "hacker" {
+                            uart_puts("The Pink Hacker Boy says: Race conditions are dead - change my mind.\n");
+                        } else if cmd == "pink-jogger-mode-on" {
+                            set_pink_mode(true);
+                            uart_puts("Pink Jogger Mode activated.\n");
+                        } else if cmd == "pink-jogger-mode-off" {
+                            set_pink_mode(false);
+                            uart_puts("Pink Jogger Mode deactivated.\n");
+                        } else {
+                             // Normales Echo für unbekannte Befehle
+                            uart_puts("Echo: ");
+                            uart_puts(cmd);
+                            uart_puts("\n");
+                        }
+
+                        CMD_LEN = 0; // Puffer zurücksetzen
+                    }
+                    uart_puts("> ");
+                },
+                127 | 8 => { // Backspace / Delete
+                    if CMD_LEN > 0 {
+                        CMD_LEN -= 1;
+                        uart_puts("\x08 \x08"); // Rückwärts, überschreiben, rückwärts
+                    }
+                },
+                _ => { // Normales Zeichen
+                    if CMD_LEN < CMD_BUFFER_SIZE - 1 {
+                        let c_as_slice = &[c];
+                        let c_as_str = core::str::from_utf8_unchecked(c_as_slice);
+                        CMD_BUFFER[CMD_LEN] = c;
+                        CMD_LEN += 1;
+                        // Echo des Zeichens zurück an den Benutzer
+                        uart::uart_puts(c_as_str);
+                    }
+                }
+            }
+        }
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_handle_trap() -> ! {
-    let mcause: usize;
-    asm!("csrr {}, mcause", out(reg) mcause);
-    uart_puts("\n>> HARLEKIN: PMP-Eingriff! Zugriff auf geschützten Bereich unterbunden. <<\n");
-    uart_puts("System nominal. Ordnung gewahrt.\n");
-    loop { asm!("wfi"); }
+pub extern "C" fn kmain() -> ! {
+    uart_puts("\n[corode] kmain enter\n");
+
+    // PMP-Setup
+    pmp::set_pmp_region_napot(0, 0, 1024 * 1024 * 1024); // 1GB
+    uart_puts("[corode] pmp initialized\n");
+
+    let mut state = CoreState::new();
+    state.set_cond(id::PMP_OK);
+    
+    // EASTER EGG: Eierschalensollbruchstellenverursacher
+    uart_puts("\nEierschalensollbruchstellenverursacher sagt Hallo!\n");
+
+    uart_puts("Willkommen bei Corode. Das Orakel erwartet deine Eingabe.\n");
+    uart_puts("> "); // Prompt für das Terminal
+    
+    let mut tick_counter = 0;
+
+    loop {
+        handle_terminal_input();
+
+        // Verlangsamen des Heartbeats, damit das Terminal benutzbar bleibt
+        tick_counter += 1;
+        if tick_counter > 500000 {
+            state.set_cond(id::TIMER_TICK);
+            tick_counter = 0;
+        }
+
+        state.drain_pending_conds();
+        block::run_blocks(block::BLOCKS, &mut state);
+    }
 }

@@ -1,48 +1,43 @@
-# corode-core: Das Architektonische Manifest
+# Corode - Technische Dokumentation
 
-**Fassung: 2.0 (Wiedergeburt)**
+## 1. Vision: Ein beweisbar korrektes Betriebssystem
 
----
+Corode ist der Versuch, ein Betriebssystem zu schaffen, dessen Verhalten nicht nur getestet, sondern formal bewiesen wird. Anstatt auf komplexe, zur Laufzeit getroffene Entscheidungen (wie Scheduling oder dynamische Speicherverwaltung) zu setzen, wird das gesamte Systemverhalten zur Compile-Zeit in einem **Manifest** definiert und mit einem SMT-Solver (wie Z3) auf Korrektheit und Stabilität überprüft.
 
-## 1. Das übergeordnete Paradigma: Hardware-Sozialdemokratie
+## 2. Das Kernkonzept: Die Condition
 
-Die Architektur definiert einen radikalen Paradigmenwechsel. Das klassische Von-Neumann-Modell basiert auf Konkurrenz: Prozesse kämpfen um Speicher und Rechenzeit, was zu Komplexität, Sicherheitslücken und Ineffizienz führt. Unser Modell ersetzt diesen Kampf durch eine **Hardware-Sozialdemokratie**. Die zentrale These lautet: **"Everything is an isolated condition"**. Jede Einheit im System – sei es ein Prozess, ein Speicherbereich oder ein Kommunikationskanal – wird als eigenständige, isolierte "Condition" betrachtet. Diese Conditions konkurrieren nicht, sondern existieren gleichberechtigt in ihrer vordefinierten Rolle, erhalten genau die benötigten Ressourcen zugeteilt und kommunizieren nur über definierte, sichere Kanäle.
+Alles im System ist eine **Condition**: ein isolierter, vollständig aufgelöster, deterministisch ausführbarer Zustand. Eine Condition ist der atomare Baustein des Systems.
 
-## 2. Architektonische Grundprinzipien (Die 8 Säulen)
+- **Isolation:** Jede Condition läuft in einem eigenen, durch Hardware (RISC-V PMP) geschützten Speicherbereich.
+- **Determinismus:** Der Code einer Condition ist einfach und in seiner Ausführungszeit vorhersagbar. Er hat keinen Zugriff auf blockierende Operationen oder komplexe Schleifen.
+- **Formale Verifikation:** Eine Condition "existiert" nur, wenn ihre Anforderungen (Speicher, Rechenzeit, Zugriff auf andere Conditions) die im Manifest festgelegten Systemregeln nicht verletzen.
 
-Die gesamte Architektur stützt sich auf acht Kernprinzipien, die das Verhalten des Systems deterministisch festlegen:
+## 3. Genesis-Implementierung: Der erste lauffähige Beweis
 
-1.  **Isolation statt Abstraktion:** Anstatt Funktionen in undurchsichtigen Softwareschichten zu verstecken, wird jede Condition logisch und physikalisch isoliert. Dies eliminiert Seiteneffekte und unerwünschte Abhängigkeiten.
-2.  **Harmonie statt Krieg:** Das System basiert nicht auf Wettbewerb ("Survival of the fittest"), sondern auf Koexistenz. Jede Condition hat eine inhärente Rolle, die ihren Ressourcenbedarf und ihre Priorität definiert.
-3.  **Determinismus statt Interrupt:** Das Verhalten ist vollständig vorhersagbar. Gleiche Eingaben führen unter gleichen Bedingungen stets zu gleichen Ausgaben und Laufzeiten.
-4.  **Block-ID statt Pointer:** Der klassische, sicherheitskritische Speicherzeiger (Pointer) wird abgeschafft. Jede Condition greift auf Speicher über eine eindeutige **Block-ID** und einen Offset zu.
-5.  **Sättigung statt Überlast:** Ein Vollauslastung von 90-100% führt nicht zu einem Absturz. Das System schichtet um, versetzt unwichtige Blöcke in den Tiefschlaf und hält kritische Ressourcen aktiv.
-6.  **Ultra-Microkernel:** Der Kernel ist drastisch reduziert ("nur ein paar Bits"). Seine einzige Aufgabe ist die eines "Türstehers" für die Isolation der Conditions.
-7.  **Bedarf statt Gier:** Ressourcenzuteilung erfolgt nicht durch Beantragung, sondern durch Zuweisung basierend auf dem im Trainingsmodus ermittelten Bedarf einer Condition.
-8.  **Hardware-Sozialdemokratie:** Die ultimative Konsequenz: Jede Condition ist in ihrer Rolle gleichberechtigt, erhält garantiert ihren benötigten Platz und kann keine Ressourcen über ihren Bedarf hinaus beanspruchen.
+Das aktuelle System (`main.rs`) ist die "Genesis"-Implementierung. Es beweist die grundlegende Machbarkeit auf Bare-Metal-RISC-V.
 
-## 3. Technische Umsetzung auf RISC-V (Der "Z3³"-Kern)
+### Komponenten
 
--   **Physischer Speicherschutz (PMP) als Fundament:** Das Herzstück der Hardware-Isolation. Jede Condition wird einer oder mehreren PMP-Regionen zugeordnet, sodass ein Zugriff auf fremden Speicher physikalisch unmöglich ist.
--   **Erweiterte Speicherlogistik (Z3³):** Definiert Speicher in festen Blöcken, die über eine eindeutige **Block-ID** adressiert werden. Macht herkömmliche Speicherzeiger überflüssig.
--   **Der Harlekin-Kernel:** Minimaler Kernel (Proof-of-Concept in Rust), der PMP-Regionen setzt und einen Trap-Handler ("Harlekin") installiert, um Zugriffsverletzungen abzufangen.
--   **L0-Agenten:** Unabhängige Mikrocontroller (z.B. STM32), die als "physikalische Intelligenz" auf dem Mainboard Strom, Temperatur und Zugriffsmuster überwachen und autonom eingreifen können.
--   **Sidekernels:** Isolierte Umgebungen für die notwendige Kommunikation zwischen Conditions, oft über sichere Protokolle wie WireGuard.
+- **`main.rs` (`kmain`)**: Der Einstiegspunkt nach dem Bootloader. Initialisiert die UART, richtet eine grundlegende PMP-Region ein und startet die deterministische Hauptschleife.
+- **`state.rs` (`CoreState`)**: Hält den globalen Zustand des Cores, im Wesentlichen die `CondMask`, eine Bitmaske, die anzeigt, welche Conditions gerade aktiv sind.
+- **`cond.rs` (`CondMask`, `id`)**: Definiert die Bitmaske für Conditions und weist jeder benannten Condition eine eindeutige ID (eine Bit-Position) zu.
+- **`block.rs` (`Block`, `run_blocks`)**:
+    - Ein `Block` ist die praktische Implementierung einer Zustandsänderung. Er enthält die auszuführende Funktion (`run`) und die Bedingungen (`require_all`, `require_none`), unter denen er laufen darf.
+    - Die Funktion `run_blocks` ist das Herz des Systems. In einer Endlosschleife iteriert sie über alle statisch definierten `BLOCKS` und führt diejenigen aus, deren Bedingungen durch die aktuelle `CondMask` im `CoreState` erfüllt sind. Dies ist der "Scheduler" – vollständig deterministisch und ohne Priorisierung.
+- **`pmp.rs`**: Funktionen zur Konfiguration der Physical Memory Protection (PMP) von RISC-V. Dies ist die Hardware-Grundlage für die Isolation von Conditions.
+- **`uart.rs`**: Einfache, Polling-basierte UART-Treiber für die serielle Ausgabe.
+- **`trap.rs`**: Eine rudimentäre Trap-Handler-Struktur, die aktuell noch keine Funktion hat.
 
-## 4. Systemdynamik: Vom Training zur Sättigung
+### Systemablauf (Genesis)
 
-1.  **Trainingsmodus:** Neue Conditions werden in einer Sandbox analysiert, um ihr Laufzeitverhalten und ihren exakten Ressourcenbedarf (Profil) zu ermitteln.
-2.  **Deterministische Zuweisung:** Basierend auf diesem Profil wird der Condition bei einem produktiven Start exakt die benötigte Anzahl an Speicherblöcken und Rechenzeit zugewiesen.
-3.  **Sättigungsmanagement:** Bei hoher Systemlast werden Conditions mit niedriger Priorität in einen Tiefschlaf-Zustand versetzt, um kritische Operationen nicht zu beeinträchtigen.
-
-## 5. Komponenten und Implementierungsstatus
-
-| Komponente | Funktion | Implementierungsstatus |
-| :--- | :--- | :--- |
-| **Z3³-Speicherlogistik** | Deterministische Speicherverwaltung mit Block-ID | Konzept, erster Code |
-| **PMP (Physical Memory Protection)** | Hardware-Isolation pro Condition | **Verfügbar in RISC-V** |
-| **Harlekin-Kernel** | Minimaler Kernel mit Trap-Handler | Proof-of-Concept (Rust) |
-| **Orakel (OxiZ/Z3)** | Host-Tool für formale Verifikation | Proof-of-Concept (Rust) |
-| **L0-Agenten** | Physikalische Überwachung (Strom, Temperatur) | Konzept, Hardware-Prototyp geplant |
-| **Sidekernels** | Isolierte Umgebungen für Kommunikation | In Entwicklung |
-| **4bit Breaker** | Hardware-Impulsgeber für deterministische Tests | In Entwicklung (durch "CTO Kevin") |
+1.  **`kmain`**:
+    - Initialisiert UART.
+    - Richtet eine globale PMP-Region ein, die den gesamten Speicher für den Kernel freigibt.
+    - Erstellt einen neuen `CoreState`.
+    - Setzt die initiale Condition `PMP_OK`.
+2.  **`loop` in `kmain`**:
+    - Ruft `run_blocks` auf.
+    - `run_blocks` prüft alle `BLOCKS` in der statischen `BLOCKS`-Tabelle.
+    - Der `boot_done`-Block wird ausgeführt, da seine Bedingung (`require_none: BOOT_DONE`) erfüllt ist. Er setzt die `BOOT_DONE`-Condition.
+    - In der nächsten Iteration wird der `boot_done`-Block nicht mehr ausgeführt.
+    - Das System verbleibt in diesem stabilen, leeren Zustand und wartet auf externe Interrupts (die noch nicht implementiert sind), um neue Conditions zu setzen.
