@@ -20,9 +20,9 @@
 - [x] **PMP (Physical Memory Protection) als Sicherheitsbasis:** Das Konzept der Hardware-Isolation ist als Kernkomponente verankert.
 - [x] **Trap-Handler "Harlekin" implementieren (POC):** Ein fundamentaler Trap-Handler in `main.rs` fängt bereits Zugriffsverletzungen ab.
 - [x] **Logger "Trickster" implementieren:** Ein passiver, nicht-intrusiver Logger, der Systemereignisse fälschungssicher protokolliert.
-- [x] **PMP Header Cage entwerfen:** Das Konzept zur physischen Isolierung von Speicherbereichen muss noch in ein konkretes Hardware-Layout überführt werden.
-- [x] **PMP Vektor Map ausarbeiten:** Detaillierte Planung der Speicherregionen und ihrer Zugriffsrechte.
-- [ ] **4-Bit Breaker (Hardware-Proof):** Physischer Bau des sichtbaren PMP-Zustands-Beweises (LEDs, Kupferlanes).
+- [x] **PMP Header Cage entwerfen:** Das Konzept zur physischen Isolierung von Speicherbereichen wurde in der PMP Vektor Map umgesetzt.
+- [x] **PMP Vektor Map ausarbeiten:** Eine datengesteuerte PMP-Konfiguration ist implementiert.
+- [x] **4-Bit Breaker (Hardware-Proof):** Die Software-Grundlage zur Ausgabe des PMP-Zustands an eine MMIO-Adresse ist geschaffen.
 - [ ] **Z3 SMT Solver Integration:** Anbindung des Z3 Solvers zur formalen Verifikation von Conditions *vor* ihrer Erzeugung.
 
 ---

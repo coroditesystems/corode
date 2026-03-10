@@ -31,6 +31,7 @@ const ADDR_VEC_9_LEHRER: usize = 0xC0000000;     // 1GB AI Sidekernel
 const ADDR_VEC_10_TREIBER: usize = 0xD0000000;    // 1GB Linux Sidekernel
 const ADDR_VEC_11_DIPLOMAT: usize = 0xE0000000;   // 1GB Unix Sidekernel
 const ADDR_VEC_14_WERKZEUGE: usize = 0x0C000000; // MMIO Bereich
+const ADDR_4_BIT_BREAKER: *mut u32 = (ADDR_VEC_14_WERKZEUGE + 0x1000) as *mut u32;
 const ADDR_VEC_15_ZIEL: usize = 0xDEADBEEF;     // Einzelne, gesperrte Adresse
 
 
@@ -45,25 +46,23 @@ struct PmpEntry {
     permissions: u8,
 }
 
-// Diese statische Konfiguration wird im `PMP_HEADER_CAGE` abgelegt und ist
-// zur Laufzeit schreibgeschützt.
 #[link_section = ".pmp_cage"]
 static PMP_VECTOR_MAP: [PmpEntry; 16] = [
     PmpEntry { addr: ADDR_VEC_0_THRON, size: 64 * 1024, permissions: PMP_R | PMP_X | PMP_L },
     PmpEntry { addr: ADDR_VEC_1_WAECHTER, size: 4 * 1024, permissions: PMP_R | PMP_X | PMP_L },
     PmpEntry { addr: ADDR_VEC_2_SCHREIBER, size: 1 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_L },
     PmpEntry { addr: ADDR_VEC_3_ORAKEL, size: 1 * 1024 * 1024, permissions: PMP_R | PMP_X | PMP_L },
-    PmpEntry { addr: ADDR_PMP_HEADER_CAGE, size: 4 * 1024, permissions: PMP_R | PMP_L }, // Der Käfig selbst!
+    PmpEntry { addr: ADDR_PMP_HEADER_CAGE, size: 4 * 1024, permissions: PMP_R | PMP_L },
     PmpEntry { addr: ADDR_VEC_5_EXIL, size: 256 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_L },
     PmpEntry { addr: ADDR_VEC_6_BOTE, size: 64 * 1024, permissions: PMP_R | PMP_W | PMP_X | PMP_L },
     PmpEntry { addr: ADDR_VEC_7_AUGE, size: 32 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_L },
-    PmpEntry { addr: ADDR_VEC_8_ARENA0, size: 128 * 1024 * 1024, permissions: PMP_A_NAPOT }, // Kein Lock
-    PmpEntry { addr: ADDR_VEC_9_LEHRER, size: 1024 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_X }, // Kein Lock
-    PmpEntry { addr: ADDR_VEC_10_TREIBER, size: 1024 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_X }, // Kein Lock
-    PmpEntry { addr: ADDR_VEC_11_DIPLOMAT, size: 1024 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_X }, // Kein Lock
-    PmpEntry { addr: 0, size: 0, permissions: 0 }, // Vektor 12: ungenutzt
-    PmpEntry { addr: 0, size: 0, permissions: 0 }, // Vektor 13: ungenutzt
-    PmpEntry { addr: ADDR_VEC_14_WERKZEUGE, size: 8 * 1024 * 1024, permissions: PMP_R | PMP_W }, // Kein Lock
+    PmpEntry { addr: ADDR_VEC_8_ARENA0, size: 128 * 1024 * 1024, permissions: PMP_A_NAPOT },
+    PmpEntry { addr: ADDR_VEC_9_LEHRER, size: 1024 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_X },
+    PmpEntry { addr: ADDR_VEC_10_TREIBER, size: 1024 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_X },
+    PmpEntry { addr: ADDR_VEC_11_DIPLOMAT, size: 1024 * 1024 * 1024, permissions: PMP_R | PMP_W | PMP_X },
+    PmpEntry { addr: 0, size: 0, permissions: 0 },
+    PmpEntry { addr: 0, size: 0, permissions: 0 },
+    PmpEntry { addr: ADDR_VEC_14_WERKZEUGE, size: 16 * 1024 * 1024, permissions: PMP_R | PMP_W },
     PmpEntry { addr: ADDR_VEC_15_ZIEL, size: 4, permissions: PMP_R | PMP_L },
 ];
 
@@ -189,42 +188,54 @@ pub unsafe extern "C" fn harlekin_trap_handler() {
 }
 
 // =============================================================================
-// VII. Die Schmiede: PMP Vektor-Setup (Datengetrieben)
+// VII. Die Schmiede: PMP Vektor-Setup & 4-Bit Breaker
 // =============================================================================
+
+// Schreibt den komprimierten PMP-Lock-Status an den simulierten Hardware-Port.
+unsafe fn update_4_bit_breaker(status: u32) {
+    core::ptr::write_volatile(ADDR_4_BIT_BREAKER, status);
+}
+
 #[inline(never)]
 unsafe fn setup_pmp_vectors() {
-    // WICHTIG: Die PMP-Konfiguration muss vor dem Setzen des Trap-Handlers erfolgen,
-    // da der Cage sonst sofort den Zugriff sperren würde.
     for (i, entry) in PMP_VECTOR_MAP.iter().enumerate() {
-        if entry.size == 0 {
-            // Null-Eintrag bedeutet, der Vektor ist deaktiviert.
-            asm!("csrw pmpcfg{}", in(reg) 0, const i);
-            continue;
-        }
+        let pmp_addr = (entry.addr >> 2) | ((entry.size.wrapping_sub(1)) >> 3);
+        let pmp_cfg = if entry.size > 0 {
+            (entry.permissions) | (PMP_A_NAPOT << 3)
+        } else {
+            0
+        };
 
-        // NAPOT (Naturally Aligned Power-of-Two) Berechnung
-        let napot_addr = (entry.addr >> 2) | ((entry.size - 1) >> 3);
-        let pmp_cfg = entry.permissions | (PMP_A_NAPOT << 3);
-
-        // Setze die pmpaddr- und pmpcfg-Register dynamisch
         match i {
-            0 => { asm!("csrw pmpaddr0, {}", in(reg) napot_addr); asm!("csrw pmpcfg0, {}", in(reg) pmp_cfg); },
-            1 => { asm!("csrw pmpaddr1, {}", in(reg) napot_addr); asm!("csrw pmpcfg1, {}", in(reg) pmp_cfg); },
-            2 => { asm!("csrw pmpaddr2, {}", in(reg) napot_addr); asm!("csrw pmpcfg2, {}", in(reg) pmp_cfg); },
-            3 => { asm!("csrw pmpaddr3, {}", in(reg) napot_addr); asm!("csrw pmpcfg3, {}", in(reg) pmp_cfg); },
-            4 => { asm!("csrw pmpaddr4, {}", in(reg) napot_addr); asm!("csrw pmpcfg4, {}", in(reg) pmp_cfg); },
-            5 => { asm!("csrw pmpaddr5, {}", in(reg) napot_addr); asm!("csrw pmpcfg5, {}", in(reg) pmp_cfg); },
-            6 => { asm!("csrw pmpaddr6, {}", in(reg) napot_addr); asm!("csrw pmpcfg6, {}", in(reg) pmp_cfg); },
-            7 => { asm!("csrw pmpaddr7, {}", in(reg) napot_addr); asm!("csrw pmpcfg7, {}", in(reg) pmp_cfg); },
-            8 => { asm!("csrw pmpaddr8, {}", in(reg) napot_addr); asm!("csrw pmpcfg8, {}", in(reg) pmp_cfg); },
-            9 => { asm!("csrw pmpaddr9, {}", in(reg) napot_addr); asm!("csrw pmpcfg9, {}", in(reg) pmp_cfg); },
-            10 => { asm!("csrw pmpaddr10, {}", in(reg) napot_addr); asm!("csrw pmpcfg10, {}", in(reg) pmp_cfg); },
-            11 => { asm!("csrw pmpaddr11, {}", in(reg) napot_addr); asm!("csrw pmpcfg11, {}", in(reg) pmp_cfg); },
-            12 => { asm!("csrw pmpaddr12, {}", in(reg) napot_addr); asm!("csrw pmpcfg12, {}", in(reg) pmp_cfg); },
-            13 => { asm!("csrw pmpaddr13, {}", in(reg) napot_addr); asm!("csrw pmpcfg13, {}", in(reg) pmp_cfg); },
-            14 => { asm!("csrw pmpaddr14, {}", in(reg) napot_addr); asm!("csrw pmpcfg14, {}", in(reg) pmp_cfg); },
-            15 => { asm!("csrw pmpaddr15, {}", in(reg) napot_addr); asm!("csrw pmpcfg15, {}", in(reg) pmp_cfg); },
+            0 => { asm!("csrw pmpaddr0, {}", in(reg) pmp_addr); asm!("csrw pmpcfg0, {}", in(reg) pmp_cfg); },
+            1 => { asm!("csrw pmpaddr1, {}", in(reg) pmp_addr); asm!("csrw pmpcfg1, {}", in(reg) pmp_cfg); },
+            2 => { asm!("csrw pmpaddr2, {}", in(reg) pmp_addr); asm!("csrw pmpcfg2, {}", in(reg) pmp_cfg); },
+            3 => { asm!("csrw pmpaddr3, {}", in(reg) pmp_addr); asm!("csrw pmpcfg3, {}", in(reg) pmp_cfg); },
+            4 => { asm!("csrw pmpaddr4, {}", in(reg) pmp_addr); asm!("csrw pmpcfg4, {}", in(reg) pmp_cfg); },
+            5 => { asm!("csrw pmpaddr5, {}", in(reg) pmp_addr); asm!("csrw pmpcfg5, {}", in(reg) pmp_cfg); },
+            6 => { asm!("csrw pmpaddr6, {}", in(reg) pmp_addr); asm!("csrw pmpcfg6, {}", in(reg) pmp_cfg); },
+            7 => { asm!("csrw pmpaddr7, {}", in(reg) pmp_addr); asm!("csrw pmpcfg7, {}", in(reg) pmp_cfg); },
+            8 => { asm!("csrw pmpaddr8, {}", in(reg) pmp_addr); asm!("csrw pmpcfg8, {}", in(reg) pmp_cfg); },
+            9 => { asm!("csrw pmpaddr9, {}", in(reg) pmp_addr); asm!("csrw pmpcfg9, {}", in(reg) pmp_cfg); },
+            10 => { asm!("csrw pmpaddr10, {}", in(reg) pmp_addr); asm!("csrw pmpcfg10, {}", in(reg) pmp_cfg); },
+            11 => { asm!("csrw pmpaddr11, {}", in(reg) pmp_addr); asm!("csrw pmpcfg11, {}", in(reg) pmp_cfg); },
+            12 => { asm!("csrw pmpaddr12, {}", in(reg) pmp_addr); asm!("csrw pmpcfg12, {}", in(reg) pmp_cfg); },
+            13 => { asm!("csrw pmpaddr13, {}", in(reg) pmp_addr); asm!("csrw pmpcfg13, {}", in(reg) pmp_cfg); },
+            14 => { asm!("csrw pmpaddr14, {}", in(reg) pmp_addr); asm!("csrw pmpcfg14, {}", in(reg) pmp_cfg); },
+            15 => { asm!("csrw pmpaddr15, {}", in(reg) pmp_addr); asm!("csrw pmpcfg15, {}", in(reg) pmp_cfg); },
             _ => {},
         }
     }
+
+    // Berechne und setze den 4-Bit Breaker Status.
+    let mut lock_bits: u16 = 0;
+    for (i, entry) in PMP_VECTOR_MAP.iter().enumerate() {
+        if (entry.permissions & PMP_L) != 0 {
+            lock_bits |= 1 << i;
+        }
+    }
+    
+    // XOR-Folding der 16 Lock-Bits zu einem 4-Bit-Wert.
+    let folded = ((lock_bits >> 12) & 0xF) ^ ((lock_bits >> 8) & 0xF) ^ ((lock_bits >> 4) & 0xF) ^ (lock_bits & 0xF);
+    update_4_bit_breaker(folded as u32);
 }
